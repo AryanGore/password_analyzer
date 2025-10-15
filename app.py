@@ -1,81 +1,102 @@
 from flask import Flask, render_template, request, jsonify
-import joblib
+import numpy as np
+import pickle
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from transformers import AutoTokenizer, AutoModelForCausalLM
-import numpy as np
-from utils.features import extract_all_features
+import torch
+from utils.features import extract_features
 
+# ---------- Flask setup ----------
 app = Flask(__name__)
 
-# Load ML models
-svm = joblib.load("models/svm_model.pkl")
-rf = joblib.load("models/rf_model.pkl")
-xgb = joblib.load("models/xgb_model.pkl")
+# ---------- Load ML models ----------
+svm = pickle.load(open("models/svm_model.pkl", "rb"))
+rf = pickle.load(open("models/rf_model.pkl", "rb"))
+xgb = pickle.load(open("models/xgb_model.pkl", "rb"))
+
+# Optional small LSTM for sequence scoring
 lstm_model = load_model("models/lstm_model.h5")
+tokenizer = pickle.load(open("models/tokenizer.pkl", "rb"))
 
-# DeepSeek tokenizer and model
-deepseek_tokenizer = AutoTokenizer.from_pretrained("deepseek-ai/deepseek-coder-1.5b-instruct")
-deepseek_model = AutoModelForCausalLM.from_pretrained("deepseek-ai/deepseek-coder-1.5b-instruct")
+# ---------- DeepSeek API setup ----------
+# Example: replace with your actual API endpoint and headers
+DEEPSEEK_API_URL = "https://api.deepseek.ai/v1/generate"
+DEEPSEEK_API_KEY = "YOUR_API_KEY_HERE"
 
-# Tokenizer for LSTM (fit on your dataset passwords, here simplified)
-lstm_max_len = 20  # max length for LSTM input
+import requests
 
-# Recursive refinement
-def recursive_refinement(prompt, max_iterations=5):
+def call_deepseek(prompt):
+    headers = {"Authorization": f"Bearer {DEEPSEEK_API_KEY}"}
+    payload = {"prompt": prompt, "max_new_tokens": 10}
+    response = requests.post(DEEPSEEK_API_URL, json=payload, headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        # Extract generated text (adjust based on API response structure)
+        return data.get("generated_text", "").strip()
+    return None
+
+# ---------- Password scoring ----------
+def score_password(pw):
+    features = np.array(extract_features(pw)).reshape(1, -1)
+    x_lstm = pad_sequences(tokenizer.texts_to_sequences([pw]), maxlen=20)
+    score = (
+        0.4 * lstm_model.predict(x_lstm, verbose=0)[0][0] +
+        0.3 * xgb.predict_proba(features)[0][1] +
+        0.2 * rf.predict_proba(features)[0][1] +
+        0.1 * svm.predict_proba(features)[0][1]
+    )
+    entropy = extract_features(pw)[-1]
+    return score, entropy
+
+# ---------- Mutate/refine password ----------
+def refine_password(user_pw, max_iterations=3):
+    prompt = f"Refine this password to make it stronger while keeping it similar to the original: {user_pw}"
+    refined = user_pw
     for _ in range(max_iterations):
-        # Generate candidate password
-        inputs = deepseek_tokenizer(prompt, return_tensors="pt")
-        outputs = deepseek_model.generate(**inputs, max_new_tokens=10)
-        refined = deepseek_tokenizer.decode(outputs[0], skip_special_tokens=True).split("Response:")[-1].strip()
-
-        # Extract features
-        features = extract_all_features(refined)
-        x_input = np.array(features).reshape(1, -1)
-
-        # Prepare LSTM input
-        # For simplicity, we assume character-level tokenizer with word index from dataset
-        # If not saved, LSTM contribution can be skipped or simplified
-        # Here we just mock it as 0.5
-        lstm_score = 0.5
-
-        # Combine ML model probabilities
-        final_score = (
-            0.4 * lstm_score +
-            0.3 * xgb.predict_proba(x_input)[0][1] +
-            0.2 * rf.predict_proba(x_input)[0][1] +
-            0.1 * svm.predict_proba(x_input)[0][1]
-        )
-
-        # Check if password is strong
-        if final_score > 0.8 and features[-1] > 60:
-            return refined
-
-        # Feedback for refinement
-        flags = {
-            "uppercase": not features[1],
-            "lowercase": not features[2],
-            "digits": not features[3],
-            "special_chars": not features[4],
-            "length": features[0] < 12,
-            "entropy": features[-1] < 60
-        }
-        feedback = ", ".join([k for k, v in flags.items() if v])
-        prompt = f"Refine the password '{refined}' to improve: {feedback}."
-
+        suggestion = call_deepseek(prompt)
+        if not suggestion:
+            break
+        refined = suggestion
+        score, entropy = score_password(refined)
+        # Stop if strong enough
+        if score > 0.8 and entropy > 60:
+            break
+        # Update prompt to give feedback
+        features = extract_features(refined)
+        flags = []
+        if not features[1]: flags.append("uppercase")
+        if not features[2]: flags.append("lowercase")
+        if not features[3]: flags.append("digits")
+        if not features[4]: flags.append("special_chars")
+        if features[0] < 12: flags.append("length")
+        if features[-1] < 60: flags.append("entropy")
+        feedback = ", ".join(flags)
+        prompt = f"Refine password '{refined}' to improve: {feedback}"
     return refined
 
-# Routes
+# ---------- Flask routes ----------
 @app.route("/")
 def index():
     return render_template("index.html")
 
-@app.route("/generate", methods=["POST"])
-def generate():
+@app.route("/improve_password", methods=["POST"])
+def improve_password():
     data = request.json
-    prompt = data.get("prompt", "")
-    secure_pw = recursive_refinement(prompt)
-    return jsonify({"password": secure_pw})
+    user_pw = data.get("password", "")
+    suggestions = []
+    for _ in range(3):  # Generate 3 variants
+        refined = refine_password(user_pw)
+        score, entropy = score_password(refined)
+        suggestions.append({
+            "password": refined,
+            "strength": "strong" if score > 0.8 else "weak",
+            "entropy": entropy
+        })
+    return jsonify({
+        "original": user_pw,
+        "suggestions": suggestions
+    })
 
 if __name__ == "__main__":
     app.run(debug=True)

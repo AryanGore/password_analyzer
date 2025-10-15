@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Password Enhancer</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h2>Password Analyzer and Suggestions Generator</h2>
+    <input type="password" id="userPassword" placeholder="Enter your password">
+    <button onclick="improvePassword()">Enhance</button>
+    <div id="results"></div>
+
+    <script>
+    async function improvePassword() {
+        const pw = document.getElementById("userPassword").value;
+        const res = await fetch("/improve_password", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({password: pw})
+        });
+        const data = await res.json();
+        let html = `<p>Original: ${data.original}</p><ul>`;
+        data.suggestions.forEach(s => {
+            html += `<li>${s.password} | ${s.strength} | Entropy: ${s.entropy}</li>`;
+        });
+        html += "</ul>";
+        document.getElementById("results").innerHTML = html;
+    }
+    </script>
+</body>
+</html>
