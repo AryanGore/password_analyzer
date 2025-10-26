@@ -3,5 +3,4 @@ __pycache__/
 .env
 *.csv
 *.txt
-models/*.pkl
-models/*.h5
+
