@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 # -------------------------------
 # Step 1: Paths
 # -------------------------------
-data_path = "rockyou_100k.csv"  # CSV location
+data_path ="/home/atharva/Machine Learning/Chetan/password_analyzer/model_training/rockyou.csv"  # CSV location
 models_path = "../models"        # Where to save models
 os.makedirs(models_path, exist_ok=True)
 
