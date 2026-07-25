@@ -1,31 +1,272 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Password Enhancer</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PassShield — AI Password Analyzer</title>
+  <meta name="description" content="Analyze password strength using a 4-model ML ensemble with real-time entropy scoring, crack-time estimation, and AI-powered suggestions." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
-    <h2>Password Analyzer and Suggestions Generator</h2>
-    <input type="password" id="userPassword" placeholder="Enter your password">
-    <button onclick="improvePassword()">Enhance</button>
-    <div id="results"></div>
 
-    <script>
-    async function improvePassword() {
-        const pw = document.getElementById("userPassword").value;
-        const res = await fetch("/improve_password", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({password: pw})
-        });
-        const data = await res.json();
-        let html = `<p>Original: ${data.original}</p><ul>`;
-        data.suggestions.forEach(s => {
-            html += `<li>${s.password} | ${s.strength} | Entropy: ${s.entropy}</li>`;
-        });
-        html += "</ul>";
-        document.getElementById("results").innerHTML = html;
-    }
-    </script>
+  <!-- Animated background particles -->
+  <div class="bg-particles" aria-hidden="true">
+    <span></span><span></span><span></span><span></span>
+    <span></span><span></span><span></span><span></span>
+  </div>
+
+  <div class="app-wrapper">
+
+    <!-- ── Header ─────────────────────────────── -->
+    <header class="site-header">
+      <div class="logo">
+        <div class="logo-icon" aria-hidden="true">🔐</div>
+        <div>
+          <h1 class="logo-title">PassShield</h1>
+          <p class="logo-sub">AI-Powered Password Intelligence</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="badge">4 ML Models</span>
+        <span class="badge badge-accent">LLM Enhanced</span>
+        <button id="exportReportBtn" class="btn-secondary" style="font-size:0.75rem; padding: 4px 12px;">📄 Export Report</button>
+      </div>
+    </header>
+
+    <!-- ── Input Section ──────────────────────── -->
+    <section class="input-section glass-card" aria-label="Password input">
+      <label class="input-label" for="passwordInput">Enter your password to analyze</label>
+
+      <div class="input-row">
+        <div class="input-wrapper">
+          <span class="input-icon" aria-hidden="true">🔑</span>
+          <input
+            type="password"
+            id="passwordInput"
+            class="pw-input"
+            placeholder="Type your password here…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="strengthLabel"
+          />
+          <button
+            class="eye-btn"
+            id="eyeBtn"
+            type="button"
+            aria-label="Toggle password visibility"
+            title="Show / hide"
+          >👁</button>
+        </div>
+
+        <div class="strength-pill" id="strengthPill" aria-live="polite" aria-label="Strength indicator">
+          <span id="strengthLabel">—</span>
+        </div>
+      </div>
+
+      <!-- Real-time meta row -->
+      <div class="meta-row" id="metaRow">
+        <span class="meta-chip" id="metaLength">0 chars</span>
+        <span class="meta-chip" id="metaEntropy">0 bits entropy</span>
+        <span class="meta-chip" id="metaScore">Score: —</span>
+      </div>
+
+      <!-- Breach Status Alert Banner -->
+      <div class="breach-banner safe" id="breachBanner" aria-live="polite">
+        <span class="breach-icon" id="breachIcon">🛡️</span>
+        <div class="breach-text">
+          <strong id="breachTitle">Breach Database Status: Safe</strong>
+          <span id="breachSub">Checked via HaveIBeenPwned Zero-Knowledge k-Anonymity API</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Results Grid ───────────────────────── -->
+    <div class="results-grid" id="resultsGrid" aria-live="polite">
+
+      <!-- Strength Gauge Card -->
+      <div class="glass-card gauge-card" id="gaugeCard">
+        <h2 class="card-title">Strength Score</h2>
+        <div class="gauge-wrap">
+          <canvas id="gaugeCanvas" width="220" height="140" aria-label="Strength gauge"></canvas>
+          <div class="gauge-center">
+            <span id="gaugeValue" class="gauge-value">0</span>
+            <span class="gauge-pct">%</span>
+          </div>
+        </div>
+        <div class="strength-label" id="strengthBig">—</div>
+
+        <!-- Feature checklist -->
+        <ul class="feature-list" id="featureList" aria-label="Password requirements">
+          <li id="chkLength"  class="feat-item feat-pending"><span class="feat-icon">○</span> Min 8 characters</li>
+          <li id="chkUpper"   class="feat-item feat-pending"><span class="feat-icon">○</span> Uppercase letter</li>
+          <li id="chkLower"   class="feat-item feat-pending"><span class="feat-icon">○</span> Lowercase letter</li>
+          <li id="chkDigit"   class="feat-item feat-pending"><span class="feat-icon">○</span> Number</li>
+          <li id="chkSpecial" class="feat-item feat-pending"><span class="feat-icon">○</span> Special character</li>
+        </ul>
+      </div>
+
+      <!-- Model Probabilities Card -->
+      <div class="glass-card models-card" id="modelsCard">
+        <h2 class="card-title">ML Ensemble Breakdown</h2>
+        <p class="card-sub">4 independent models — each trained on labeled password datasets</p>
+
+        <div class="model-bars" id="modelBars">
+          <div class="model-row">
+            <span class="model-name">SVM</span>
+            <div class="bar-track"><div class="bar-fill" id="barSvm" style="width:0%"></div></div>
+            <span class="model-pct" id="pctSvm">0%</span>
+          </div>
+          <div class="model-row">
+            <span class="model-name">Random Forest</span>
+            <div class="bar-track"><div class="bar-fill" id="barRf" style="width:0%"></div></div>
+            <span class="model-pct" id="pctRf">0%</span>
+          </div>
+          <div class="model-row">
+            <span class="model-name">XGBoost</span>
+            <div class="bar-track"><div class="bar-fill" id="barXgb" style="width:0%"></div></div>
+            <span class="model-pct" id="pctXgb">0%</span>
+          </div>
+          <div class="model-row">
+            <span class="model-name">LSTM</span>
+            <div class="bar-track"><div class="bar-fill" id="barLstm" style="width:0%"></div></div>
+            <span class="model-pct" id="pctLstm">0%</span>
+          </div>
+        </div>
+
+        <div class="bonus-grid" id="bonusGrid">
+          <div class="bonus-item">
+            <span class="bonus-label">Base Score</span>
+            <span class="bonus-val" id="bonBase">—</span>
+          </div>
+          <div class="bonus-item">
+            <span class="bonus-label">Pattern Adj.</span>
+            <span class="bonus-val" id="bonPat">—</span>
+          </div>
+          <div class="bonus-item">
+            <span class="bonus-label">Entropy Bonus</span>
+            <span class="bonus-val" id="bonEnt">—</span>
+          </div>
+          <div class="bonus-item">
+            <span class="bonus-label">Special Bonus</span>
+            <span class="bonus-val" id="bonSpec">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Crack Time Card -->
+      <div class="glass-card crack-card" id="crackCard">
+        <h2 class="card-title">⏱ Time to Crack</h2>
+        <p class="card-sub">Based on <span id="entropyDisplay">0</span> bits of entropy</p>
+
+        <div class="crack-table" id="crackTable">
+          <div class="crack-row">
+            <div class="crack-scenario">
+              <div class="crack-icon">🌐</div>
+              <div>
+                <div class="crack-name">Online Attack</div>
+                <div class="crack-detail">~10 guesses/sec</div>
+              </div>
+            </div>
+            <div class="crack-time" id="crackOnline">—</div>
+          </div>
+          <div class="crack-row">
+            <div class="crack-scenario">
+              <div class="crack-icon">💻</div>
+              <div>
+                <div class="crack-name">Offline CPU</div>
+                <div class="crack-detail">~1 million/sec</div>
+              </div>
+            </div>
+            <div class="crack-time" id="crackCpu">—</div>
+          </div>
+          <div class="crack-row">
+            <div class="crack-scenario">
+              <div class="crack-icon">⚡</div>
+              <div>
+                <div class="crack-name">Fast GPU</div>
+                <div class="crack-detail">~1 billion/sec</div>
+              </div>
+            </div>
+            <div class="crack-time" id="crackGpu">—</div>
+          </div>
+          <div class="crack-row">
+            <div class="crack-scenario">
+              <div class="crack-icon">🤖</div>
+              <div>
+                <div class="crack-name">Botnet / Cluster</div>
+                <div class="crack-detail">~1 trillion/sec</div>
+              </div>
+            </div>
+            <div class="crack-time" id="crackCluster">—</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /results-grid -->
+
+    <!-- ── AI Suggestions Section ─────────────── -->
+    <section class="suggestions-section" id="suggestSection">
+      <div class="suggest-header">
+        <div>
+          <h2 class="section-title">✨ AI-Powered Suggestions</h2>
+          <p class="section-sub">Powered by Groq LLM — 3 distinct security strategies</p>
+        </div>
+        <button id="improveBtn" class="btn-primary" aria-label="Generate stronger password suggestions">
+          <span id="improveBtnText">Generate Suggestions</span>
+          <span id="improveSpinner" class="spinner hidden" aria-hidden="true"></span>
+        </button>
+      </div>
+
+      <div class="suggestions-grid" id="suggestionsGrid">
+        <div class="suggest-placeholder glass-card">
+          <span>🔮</span>
+          <p>Click "Generate Suggestions" to create AI-enhanced passwords (Passphrase, Leetspeak, Cryptographic)</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Quick Custom Generator Tool ─────────── -->
+    <section class="generator-section glass-card" id="genSection">
+      <div class="gen-header">
+        <div>
+          <h2 class="card-title">⚡ Instant Password Generator</h2>
+          <p class="card-sub">Generate mathematically uncrackable passwords customized to your specs</p>
+        </div>
+        <button id="quickGenBtn" class="btn-secondary">🎲 Generate Random</button>
+      </div>
+
+      <div class="gen-controls">
+        <div class="gen-row">
+          <label for="genLenSlider">Length: <strong id="genLenVal">16</strong> chars</label>
+          <input type="range" id="genLenSlider" min="8" max="32" value="16" />
+        </div>
+        <div class="gen-options">
+          <label class="gen-check"><input type="checkbox" id="chkGenUpper" checked /> ABC</label>
+          <label class="gen-check"><input type="checkbox" id="chkGenLower" checked /> abc</label>
+          <label class="gen-check"><input type="checkbox" id="chkGenDigits" checked /> 123</label>
+          <label class="gen-check"><input type="checkbox" id="chkGenSymbols" checked /> !@#</label>
+        </div>
+      </div>
+
+      <div class="gen-output-row">
+        <input type="text" id="genResultInput" class="gen-output-field" readonly placeholder="Generated password will appear here..." />
+        <button id="genCopyBtn" class="btn-primary">📋 Copy & Test</button>
+      </div>
+    </section>
+
+    <!-- Toast Notification -->
+    <div id="toastNotification" class="toast hidden">Copied to clipboard!</div>
+
+    <!-- ── Footer ─────────────────────────────── -->
+    <footer class="site-footer">
+      <p>PassShield uses a 4-model ML ensemble (SVM · Random Forest · XGBoost · LSTM) with LLM enhancement via Groq.</p>
+      <p class="footer-note">Your passwords are analyzed locally and never stored.</p>
+    </footer>
+
+  </div><!-- /app-wrapper -->
+
+  <script src="/static/script.js"></script>
 </body>
 </html>
