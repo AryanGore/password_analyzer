@@ -17,15 +17,10 @@ import numpy as np
 import joblib
 import os
 from dotenv import load_dotenv
+from datetime import datetime
 
-# TensorFlow is not yet available for Python 3.14 — graceful fallback
-TF_AVAILABLE = False
-try:
-    from tensorflow.keras.models import load_model
-    from tensorflow.keras.preprocessing.sequence import pad_sequences
-    TF_AVAILABLE = True
-except ImportError:
-    print("[WARN] TensorFlow not available — LSTM model will be skipped.")
+# TensorFlow LSTM replaced with sklearn MLP (no TF dependency, works on Python 3.14+)
+# The MLP is a neural network with the same role as LSTM in the ensemble.
 
 from utils.features import (
     extract_features,
@@ -48,8 +43,11 @@ MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
 # LLM Setup (Groq Direct API via requests)
 # ─────────────────────────────────────────────
 import requests
+import json
+import secrets
+import string
 
-def _call_groq(user_pw: str, strategy: str = "passphrase") -> str | None:
+def _call_groq(user_pw: str, strategy: str = "passphrase", previous_failures: list = None) -> dict | None:
     if not GROQ_API_KEY or GROQ_API_KEY == "your_groq_api_key_here":
         return None
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -76,39 +74,50 @@ def _call_groq(user_pw: str, strategy: str = "passphrase") -> str | None:
     }
 
     instruction = strategy_instructions.get(strategy, strategy_instructions["passphrase"])
+    
+    error_context = ""
+    if previous_failures:
+        error_context = "\nPREVIOUS ATTEMPTS FAILED:\n" + "\n".join(f"- {f}" for f in previous_failures) + "\nDo NOT generate these again. Fix the weaknesses mentioned!"
 
     payload = {
-        "model": "deepseek-r1-distill-llama-70b",
+        "model": "llama3-70b-8192",
+        "response_format": {"type": "json_object"},
         "messages": [
             {
                 "role": "system",
                 "content": (
-                    "You are a elite cybersecurity engineer specializing in credential security. "
+                    "You are an elite cybersecurity engineer specializing in credential security. "
                     "Your task is to generate ONE single, extremely strong password based on the user's input.\n"
                     f"STRATEGY: {instruction}\n"
                     "REQUIREMENTS:\n"
                     "- Minimum 14 characters long\n"
                     "- Must contain uppercase, lowercase, numbers, and special symbols (!@#$%^&*)\n"
-                    "- NO spaces or line breaks\n"
-                    "- Output strictly ONLY the password string itself. Do not include markdown code blocks, quotes, or explanations."
+                    "- NO spaces or line breaks\n\n"
+                    "You must be HIGHLY CREATIVE and UNPREDICTABLE. Do not use generic substitutions (like replacing 'a' with '@'). "
+                    "Ensure the password looks like random noise mixed with the core concept, maximizing entropy.\n"
+                    f"{error_context}\n"
+                    "You must return your response in strictly valid JSON format with exactly two keys:\n"
+                    '1. "password": The generated secure password string.\n'
+                    '2. "mnemonic": A short, clever sentence to help the user remember this exact password.'
                 )
             },
             {
                 "role": "user",
-                "content": f"Input: '{user_pw}'. Output ONLY the strong password string:"
+                "content": f"Input: '{user_pw}'. Output JSON:"
             }
         ],
-        "temperature": 0.6,
-        "max_tokens": 64
+        "temperature": 0.7,
+        "max_tokens": 150
     }
     try:
-        resp = requests.post(url, json=payload, headers=headers, timeout=12)
+        resp = requests.post(url, json=payload, headers=headers, timeout=15)
         if resp.status_code == 200:
             content = resp.json()["choices"][0]["message"]["content"].strip()
-            if "</think>" in content:
-                content = content.split("</think>")[-1].strip()
-            result = content.split("\n")[0].strip().replace('"', '').replace("'", "").replace("`", "")
-            return result if len(result) >= 8 else None
+            # Try to parse the JSON
+            data = json.loads(content)
+            if "password" in data and "mnemonic" in data:
+                return data
+            return None
         else:
             print(f"[WARN] Groq API returned status {resp.status_code}: {resp.text}")
             return None
@@ -131,13 +140,11 @@ def load_models():
     except Exception as e:
         print(f"[ERROR] Sklearn model loading failed: {e}")
 
-    if TF_AVAILABLE:
-        try:
-            _models["lstm"] = load_model(os.path.join(MODELS_DIR, "lstm_model.h5"))
-            _models["tok"]  = joblib.load(os.path.join(MODELS_DIR, "lstm_tokenizer.pkl"))
-            print("[INFO] LSTM model loaded successfully.")
-        except Exception as e:
-            print(f"[WARN] LSTM load failed: {e}")
+    try:
+        _models["mlp"] = joblib.load(os.path.join(MODELS_DIR, "mlp_model.pkl"))
+        print("[INFO] MLP (neural net) loaded successfully.")
+    except Exception as e:
+        print(f"[WARN] MLP model not found — run model_training/train_mlp.py to generate it. ({e})")
 
 load_models()
 
@@ -150,18 +157,14 @@ app = Flask(__name__)
 # ─────────────────────────────────────────────
 # Core Analysis Logic
 # ─────────────────────────────────────────────
-def _lstm_predict(pw: str) -> float | None:
-    """Return LSTM probability score for a password, or None if unavailable."""
-    if not TF_AVAILABLE:
-        return None
-    tok = _models.get("tok")
-    lstm = _models.get("lstm")
-    if not tok or lstm is None:
+def _mlp_predict(pw: str, feats: list) -> float | None:
+    """Return MLP probability score using the same feature vector as other models."""
+    mlp = _models.get("mlp")
+    if mlp is None:
         return None
     try:
-        seq = tok.texts_to_sequences([pw])
-        x = pad_sequences(seq, maxlen=20)
-        return float(lstm.predict(x, verbose=0)[0][0])
+        x = np.array(feats).reshape(1, -1)
+        return float(mlp.predict_proba(x)[0][1])
     except Exception:
         return None
 
@@ -201,7 +204,7 @@ def full_analysis(pw: str) -> dict:
     else:
         probs["xgb"] = 0.0
 
-    lstm_val = _lstm_predict(pw)
+    lstm_val = _mlp_predict(pw, feats)
     probs["lstm"] = round(lstm_val, 4) if lstm_val is not None else None
 
     # Ensemble base score — only average available models
@@ -228,11 +231,26 @@ def full_analysis(pw: str) -> dict:
     else:
         strength = "WEAK"
 
+    # Run breach check
+    breach_result = check_pwned_api(pw)
+
+    # Downgrade strength if password is found in breach databases.
+    # Breach-aware final verdict
+    # A breached password gets its own COMPROMISED tier — distinct from WEAK/MEDIUM/STRONG.
+    # final_score = structural ML complexity (unchanged, honest about character composition)
+    # security_score = actual real-world protection (0 if breached, since attackers already have it)
+    if breach_result.get("breached"):
+        strength = "COMPROMISED"
+        security_score = 0.0
+    else:
+        security_score = round(final_score, 4)
+
     return {
         "password_length": len(pw),
         "entropy": entropy,
         "strength": strength,
-        "final_score": round(final_score, 4),
+        "final_score": round(final_score, 4),    # structural ML score
+        "security_score": security_score,         # breach-aware safety score
         "models": probs,
         "base_score": base_score,
         "bonuses": {
@@ -247,7 +265,7 @@ def full_analysis(pw: str) -> dict:
             "special": num_special,
         },
         "time_to_crack": estimate_crack_times(entropy),
-        "breach_check": check_pwned_api(pw),
+        "breach_check": breach_result,
     }
 
 
@@ -256,17 +274,29 @@ def full_analysis(pw: str) -> dict:
 # ─────────────────────────────────────────────
 
 
-def _fallback_suggestion(pw: str, variant: int) -> str:
-    """Rule-based fallback when LLM is unavailable."""
-    suffixes = ["!@#2025", "$ecure99", "#Safe!X"]
-    prefixes = ["Str0ng", "S@fe", "Sec#re"]
-    base = pw.capitalize() if pw else "Password"
+def _fallback_suggestion(pw: str, variant: int) -> dict:
+    """Smarter, randomized fallback when LLM is unavailable."""
+    base = pw.capitalize() if pw else "Secret"
+    if len(base) > 8:
+        base = base[:8]  # Keep it manageable
+        
+    chars = string.ascii_letters + string.digits + "!@#$%^&*"
+    random_suffix = "".join(secrets.choice(chars) for _ in range(8))
+    random_prefix = "".join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(3))
+    
     if variant == 0:
-        return base + suffixes[0]
+        pwd = f"{base}_{random_suffix}"
+        mnemonic = f"Your word '{base}' followed by an underscore and 8 random characters: {random_suffix}"
     elif variant == 1:
-        return prefixes[1] + base + "7!"
+        leetspeak = base.replace('a','@').replace('e','3').replace('i','1').replace('o','0').replace('s','$')
+        pwd = f"{random_prefix}!{leetspeak}#{secrets.choice(string.digits)}{secrets.choice(string.ascii_lowercase)}"
+        mnemonic = f"Prefix '{random_prefix}!', leetspeak version of '{base}', and 2 random characters at the end."
     else:
-        return base[:4].upper() + base[4:] + suffixes[2] if len(base) > 4 else prefixes[2] + base + "!2"
+        # Cryptographic style
+        pwd = f"{secrets.choice(string.punctuation)}{base}{random_suffix[::-1]}{secrets.choice(string.ascii_uppercase)}"
+        mnemonic = f"A random symbol, your word '{base}', the reverse of the random suffix, and an uppercase letter."
+
+    return {"password": pwd, "mnemonic": mnemonic}
 
 
 # ─────────────────────────────────────────────
@@ -306,14 +336,49 @@ def improve():
 
         suggestions = []
         for idx, s in enumerate(strategies):
-            candidate = _call_groq(pw, s["id"]) or _fallback_suggestion(pw, idx)
-            analysis = full_analysis(candidate)
+            best_candidate = None
+            best_analysis = None
+            best_mnemonic = ""
+            failures = []
+            
+            # Agentic Validation Loop (up to 3 tries)
+            for attempt in range(3):
+                gen_data = _call_groq(pw, s["id"], previous_failures=failures if failures else None)
+                if not gen_data:
+                    # Fallback if API fails completely
+                    gen_data = _fallback_suggestion(pw, idx)
+                
+                candidate_pw = gen_data.get("password", "")
+                candidate_mnem = gen_data.get("mnemonic", "No mnemonic provided.")
+                
+                analysis = full_analysis(candidate_pw)
+                
+                # If it's perfect, we break early
+                if analysis["strength"] == "STRONG" and not analysis["missing_features"]:
+                    best_candidate = candidate_pw
+                    best_analysis = analysis
+                    best_mnemonic = candidate_mnem
+                    break
+                
+                # Otherwise, record what went wrong for the next iteration
+                error_msg = f"Generated '{candidate_pw}' which was rated {analysis['strength']}."
+                if analysis["missing_features"]:
+                    error_msg += f" Missing: {', '.join(analysis['missing_features'])}."
+                failures.append(error_msg)
+                
+                # Keep track of the best one we've seen so far in case we never get a perfect one
+                if best_analysis is None or analysis["security_score"] > best_analysis["security_score"]:
+                    best_candidate = candidate_pw
+                    best_analysis = analysis
+                    best_mnemonic = candidate_mnem
+
             suggestions.append({
                 "strategy": s["title"],
-                "password": candidate,
-                "strength": analysis["strength"],
-                "score":    analysis["final_score"],
-                "entropy":  analysis["entropy"],
+                "password": best_candidate,
+                "mnemonic": best_mnemonic,
+                "strength": best_analysis["strength"],
+                "score":    best_analysis["final_score"],
+                "entropy":  best_analysis["entropy"],
             })
 
         return jsonify({
@@ -339,7 +404,7 @@ def export_report():
         report_md = f"""# 🛡️ PassShield Security Audit Report
 
 **Evaluated Target:** `{pw}`
-**Timestamp:** `2026-07-25`
+**Timestamp:** `{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}`
 **Security Rating:** `{analysis['strength']}` (Score: {analysis['final_score']*100:.1f}%)
 
 ---
