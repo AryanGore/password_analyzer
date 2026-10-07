@@ -92,6 +92,21 @@ function resetUI() {
     el.className = 'feat-item feat-pending';
     el.querySelector('.feat-icon').textContent = '○';
   });
+
+  // Reset breach banner to neutral state
+  const bb = document.getElementById('breachBanner');
+  if (bb) {
+    bb.className = 'breach-banner safe';
+    document.getElementById('breachIcon').textContent = '🛡️';
+    document.getElementById('breachTitle').textContent = 'Breach Database Status: Not yet checked';
+    document.getElementById('breachSub').textContent = 'Will be verified using HaveIBeenPwned Zero-Knowledge k-Anonymity protocol once you type a password';
+  }
+
+  // Reset structural chip and callout
+  const sc = document.getElementById('structChip');
+  if (sc) sc.style.display = 'none';
+  const co = document.getElementById('compromisedCallout');
+  if (co) co.hidden = true;
 }
 
 // ── Instant lightweight update (no API) ─────────────
@@ -126,23 +141,50 @@ async function fetchAnalysis(pw) {
 
 // ── Render Full Analysis ─────────────────────────────
 function renderAnalysis(data) {
-  const score    = data.final_score ?? 0;
-  const strength = data.strength ?? '—';
-  const entropy  = data.entropy ?? 0;
-  const pct      = Math.round(score * 100);
+  const structScore    = data.final_score ?? 0;        // ML structural complexity
+  const securityScore  = data.security_score ?? structScore; // breach-aware safety
+  const strength       = data.strength ?? '—';
+  const entropy        = data.entropy ?? 0;
+  const gaugePct       = Math.round(securityScore * 100); // gauge uses safety score
+
+  // Strength class — 4 tiers
+  const cls = strength === 'STRONG'      ? 'strong'
+            : strength === 'COMPROMISED' ? 'compromised'
+            : strength === 'MEDIUM'      ? 'medium'
+            :                              'weak';
 
   // Pill + big label
-  const cls = strength === 'STRONG' ? 'strong' : (strength === 'MEDIUM' ? 'medium' : 'weak');
   setPill(strength, cls);
   strengthBig.textContent = strength;
   strengthBig.className   = `strength-label ${cls}`;
 
-  // Meta row
-  metaScore.textContent  = `Score: ${(score * 100).toFixed(1)}%`;
+  // Meta row — show BOTH scores when compromised
+  const isCompromised = strength === 'COMPROMISED';
+  if (isCompromised) {
+    metaScore.textContent = `ML Structure: ${(structScore * 100).toFixed(1)}%  ·  Security: 0%`;
+  } else {
+    metaScore.textContent = `Score: ${(structScore * 100).toFixed(1)}%`;
+  }
   entropyDisp.textContent = entropy;
 
-  // Gauge
-  setGaugeTarget(pct, cls);
+  // Gauge driven by SECURITY score (drops to 0 when COMPROMISED)
+  setGaugeTarget(gaugePct, cls);
+
+  // Structural score chip below gauge
+  const structChip = document.getElementById('structChip');
+  const structVal  = document.getElementById('structVal');
+  if (structChip && structVal) {
+    if (isCompromised) {
+      structChip.style.display = 'flex';
+      structVal.textContent = `${(structScore * 100).toFixed(1)}%`;
+    } else {
+      structChip.style.display = 'none';
+    }
+  }
+
+  // Compromised callout explanation
+  const callout = document.getElementById('compromisedCallout');
+  if (callout) callout.hidden = !isCompromised;
 
   // Model bars (LSTM may be null if TF unavailable)
   const models = data.models ?? {};
@@ -171,7 +213,7 @@ function renderAnalysis(data) {
   const pw = pwInput.value;
   updateChecklist(pw, missing);
 
-  // Breach Check Status
+  // Breach Check Status — three states: safe, breached (Unsafe), error
   const bc = data.breach_check ?? {};
   const breachBanner = document.getElementById('breachBanner');
   const breachIcon   = document.getElementById('breachIcon');
@@ -179,15 +221,23 @@ function renderAnalysis(data) {
   const breachSub    = document.getElementById('breachSub');
 
   if (bc.breached) {
+    // ❌ Unsafe — password found in breach databases
     breachBanner.className = 'breach-banner breached';
     breachIcon.textContent = '🚨';
-    breachTitle.textContent = `CRITICAL BREACH WARNING: Found in ${bc.count.toLocaleString()} data leaks!`;
-    breachSub.textContent = 'This password is compromised in public database dumps (Checked via HIBP k-Anonymity API).';
+    breachTitle.textContent = `Breach Database Status: Unsafe — Found in ${bc.count.toLocaleString()} data leaks!`;
+    breachSub.textContent = 'This password is publicly compromised. Attackers can find it instantly. Do NOT use this password anywhere. (Checked via HIBP k-Anonymity API)';
+  } else if (bc.error) {
+    // ⚠️ Unknown — API check could not be completed (network/timeout)
+    breachBanner.className = 'breach-banner warning';
+    breachIcon.textContent = '⚠️';
+    breachTitle.textContent = 'Breach Database Status: Unable to Check';
+    breachSub.textContent = `Could not reach the HaveIBeenPwned API at this time. Please try again later. (${bc.error})`;
   } else {
+    // ✅ Safe — password not found in any known breach database
     breachBanner.className = 'breach-banner safe';
     breachIcon.textContent = '🛡️';
-    breachTitle.textContent = 'Breach Database Status: Clean (0 Breaches Found)';
-    breachSub.textContent = 'Verified using HaveIBeenPwned Zero-Knowledge k-Anonymity protocol.';
+    breachTitle.textContent = 'Breach Database Status: Safe — No Breaches Found';
+    breachSub.textContent = 'Verified using HaveIBeenPwned Zero-Knowledge k-Anonymity protocol. Not found in any known data leak.';
   }
 }
 
@@ -245,10 +295,11 @@ function updateChecklist(pw, missing) {
 
 // ── Radial Gauge (Canvas) ─────────────────────────────
 const GAUGE_COLORS = {
-  weak:   '#ff4d6d',
-  medium: '#ffb347',
-  strong: '#3dfaaf',
-  empty:  'rgba(255,255,255,0.06)',
+  weak:        '#ff4d6d',
+  medium:      '#ffb347',
+  strong:      '#3dfaaf',
+  compromised: '#ff4d6d',  // same red as weak but triggers pulse animation via CSS
+  empty:       'rgba(255,255,255,0.06)',
 };
 
 function drawGauge(value, cls) {
@@ -382,6 +433,7 @@ function renderSuggestionCard(s, idx) {
       <span class="suggest-tag suggest-entropy">Score: ${(s.score * 100).toFixed(1)}%</span>
     </div>
     <div class="suggest-entropy" style="margin-bottom:12px">Entropy: ${s.entropy} bits</div>
+    <div class="suggest-mnemonic"><strong>💡 Mnemonic:</strong> ${escHtml(s.mnemonic)}</div>
     <button class="copy-btn" id="copyBtn${idx}" onclick="copyPassword(${idx})">📋 Copy Password</button>
   `;
   suggestGrid.appendChild(card);

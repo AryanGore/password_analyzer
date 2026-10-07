@@ -277,6 +277,17 @@ body::before {
 .strength-pill.weak   { border-color: var(--strength-weak);   color: var(--strength-weak);   background: rgba(255, 77, 109, 0.10); }
 .strength-pill.medium { border-color: var(--strength-med);    color: var(--strength-med);    background: rgba(255, 179, 71, 0.10); }
 .strength-pill.strong { border-color: var(--strength-strong); color: var(--strength-strong); background: rgba(61, 250, 175, 0.10); }
+.strength-pill.compromised {
+  background: rgba(255, 77, 109, 0.18);
+  border-color: rgba(255, 77, 109, 0.6);
+  color: #ff4d6d;
+  animation: pulseCompromised 1.5s infinite;
+}
+
+@keyframes pulseCompromised {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,77,109, 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(255,77,109, 0); }
+}
 
 /* ── Meta Row ────────────────────────────────────── */
 .meta-row {
@@ -309,6 +320,12 @@ body::before {
   background: rgba(255, 77, 109, 0.12);
   box-shadow: 0 0 20px rgba(255, 77, 109, 0.2);
   animation: pulseWarning 2s infinite;
+}
+
+.breach-banner.warning {
+  border-color: rgba(255, 179, 71, 0.5);
+  background: rgba(255, 179, 71, 0.08);
+  box-shadow: 0 0 16px rgba(255, 179, 71, 0.15);
 }
 
 @keyframes pulseWarning {
@@ -421,6 +438,36 @@ body::before {
 .strength-label.weak   { color: var(--strength-weak); }
 .strength-label.medium { color: var(--strength-med); }
 .strength-label.strong { color: var(--strength-strong); }
+.strength-label.compromised { color: var(--strength-weak); text-shadow: 0 0 8px rgba(255, 77, 109, 0.5); }
+
+/* ── Structural Chip & Compromised Callout ───────── */
+.struct-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--glass-border);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+}
+
+.struct-chip-label { font-size: 0.8rem; color: var(--text-secondary); }
+.struct-chip-val { font-size: 0.9rem; font-family: var(--font-mono); color: var(--text-primary); }
+.struct-chip-note { font-size: 0.75rem; color: var(--text-muted); }
+
+.compromised-callout {
+  background: rgba(255, 77, 109, 0.1);
+  border: 1px solid rgba(255, 77, 109, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+.compromised-callout strong { color: var(--strength-weak); }
 
 /* ── Feature Checklist ───────────────────────────── */
 .feature-list {
@@ -763,6 +810,17 @@ body::before {
   font-size: 0.75rem;
   color: var(--text-secondary);
   font-family: var(--font-mono);
+}
+
+.suggest-mnemonic {
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  background: rgba(0, 212, 255, 0.05);
+  border-left: 3px solid var(--accent-2);
+  padding: 8px 12px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  margin-bottom: 16px;
+  line-height: 1.4;
 }
 
 .copy-btn {

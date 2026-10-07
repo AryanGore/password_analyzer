@@ -76,8 +76,8 @@
       <div class="breach-banner safe" id="breachBanner" aria-live="polite">
         <span class="breach-icon" id="breachIcon">🛡️</span>
         <div class="breach-text">
-          <strong id="breachTitle">Breach Database Status: Safe</strong>
-          <span id="breachSub">Checked via HaveIBeenPwned Zero-Knowledge k-Anonymity API</span>
+          <strong id="breachTitle">Breach Database Status: Not yet checked</strong>
+          <span id="breachSub">Will be verified using HaveIBeenPwned Zero-Knowledge k-Anonymity protocol once you type a password</span>
         </div>
       </div>
     </section>
@@ -96,6 +96,20 @@
           </div>
         </div>
         <div class="strength-label" id="strengthBig">—</div>
+
+        <!-- Structural score chip: only visible when COMPROMISED -->
+        <div class="struct-chip" id="structChip" style="display:none">
+          <span class="struct-chip-label">ML Structural Score</span>
+          <strong id="structVal" class="struct-chip-val">—</strong>
+          <span class="struct-chip-note">(complexity only)</span>
+        </div>
+
+        <!-- Compromised callout: explains the distinction -->
+        <div class="compromised-callout" id="compromisedCallout" hidden>
+          ⚠️ This password is <strong>structurally complex</strong> but has been
+          <strong>publicly exposed</strong> in data breaches. Attackers
+          already have it — they don’t need to crack it.
+        </div>
 
         <!-- Feature checklist -->
         <ul class="feature-list" id="featureList" aria-label="Password requirements">
